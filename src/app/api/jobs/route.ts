@@ -32,7 +32,7 @@ export async function POST(request: NextRequest) {
         {
           success: false,
           message: 'Invalid job data',
-          errors: validationResult.error.errors,
+          errors: validationResult.error.issues,
         },
         { status: 400 }
       );
