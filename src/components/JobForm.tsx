@@ -12,23 +12,26 @@ import Input from './ui/Input';
 import Textarea from './ui/Textarea';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/Card';
 
-const jobSchema = z.object({
+// Form input schema (strings that get transformed)
+const jobFormSchema = z.object({
   title: z.string().min(1, 'Job title is required'),
   seniority: z.string().min(1, 'Seniority is required'),
   location: z.string().min(1, 'Location is required'),
   workMode: z.string().min(1, 'Work mode is required'),
   contractType: z.string().min(1, 'Contract type is required'),
-  languages: z.string().transform((val) => val.split(',').map(s => s.trim()).filter(Boolean)),
-  mustHave: z.string().transform((val) => val.split(',').map(s => s.trim()).filter(Boolean)),
-  niceToHave: z.string().transform((val) => val.split(',').map(s => s.trim()).filter(Boolean)),
-  salaryMin: z.string().transform((val) => parseFloat(val) || 0),
-  salaryMax: z.string().transform((val) => parseFloat(val) || 0),
+  languages: z.string(),
+  mustHave: z.string(),
+  niceToHave: z.string(),
+  salaryMin: z.string(),
+  salaryMax: z.string(),
   currency: z.string().min(1, 'Currency is required'),
-  keywords: z.string().transform((val) => val.split(',').map(s => s.trim()).filter(Boolean)),
+  keywords: z.string(),
   rawText: z.string().min(1, 'Job description is required'),
+  webhookUrl: z.string().optional(),
+  executionMode: z.string().optional(),
 });
 
-type JobFormData = z.infer<typeof jobSchema>;
+type JobFormData = z.infer<typeof jobFormSchema>;
 
 interface JobFormProps {
   onJobPosted?: (response: JobPostResponse) => void;
@@ -45,7 +48,7 @@ export default function JobForm({ onJobPosted }: JobFormProps) {
     formState: { errors },
     reset,
   } = useForm<JobFormData>({
-    resolver: zodResolver(jobSchema),
+    resolver: zodResolver(jobFormSchema),
     defaultValues: {
       currency: 'EUR',
       workMode: 'Remote',
@@ -58,14 +61,15 @@ export default function JobForm({ onJobPosted }: JobFormProps) {
     setError(null);
 
     try {
+      // Transform form data to job data format
       const jobData: Job = {
         ...data,
-        languages: data.languages,
-        mustHave: data.mustHave,
-        niceToHave: data.niceToHave,
-        salaryMin: data.salaryMin,
-        salaryMax: data.salaryMax,
-        keywords: data.keywords,
+        languages: data.languages.split(',').map(s => s.trim()).filter(Boolean),
+        mustHave: data.mustHave.split(',').map(s => s.trim()).filter(Boolean),
+        niceToHave: data.niceToHave.split(',').map(s => s.trim()).filter(Boolean),
+        salaryMin: parseFloat(data.salaryMin) || 0,
+        salaryMax: parseFloat(data.salaryMax) || 0,
+        keywords: data.keywords.split(',').map(s => s.trim()).filter(Boolean),
       };
 
       const response = await postJob(jobData);

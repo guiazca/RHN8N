@@ -35,8 +35,8 @@ export class APIError extends AppError {
   }
 }
 
-export const handleAsyncError = (fn: (req: unknown, res: unknown, next: unknown) => Promise<void>) => {
-  return (req: unknown, res: unknown, next: unknown) => {
+export const handleAsyncError = (fn: (req: unknown, res: unknown, next: (err?: unknown) => void) => Promise<void>) => {
+  return (req: unknown, res: unknown, next: (err?: unknown) => void) => {
     Promise.resolve(fn(req, res, next)).catch(next);
   };
 };
@@ -50,11 +50,11 @@ export const createErrorResponse = (error: unknown) => {
     };
   }
 
-  if (error.name === 'ValidationError') {
+  if (error instanceof Error && error.name === 'ValidationError') {
     return {
       success: false,
       message: 'Validation failed',
-      errors: error.errors,
+      errors: 'errors' in error ? (error as Record<string, unknown>).errors : undefined,
       statusCode: 400,
     };
   }
