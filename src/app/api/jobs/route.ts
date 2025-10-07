@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Job, JobPostResponse } from '@/types';
 import { z } from 'zod';
+import { saveJob, findMatchingResumes } from '@/lib/localStorage';
 
 const JobSchema = z.object({
   title: z.string().min(1, 'Job title is required'),
@@ -39,50 +40,68 @@ export async function POST(request: NextRequest) {
 
     const jobData: Job = validationResult.data;
 
-    // Get webhook URL from environment variables
-    const webhookUrl = process.env.JOB_POST_WEBHOOK;
+    try {
+      // Save job to local storage
+      const savedJob = await saveJob(jobData);
+      console.log('Job saved to local storage:', savedJob.job_id);
 
-    if (!webhookUrl) {
-      // For demo purposes, simulate a successful response with mock matching
-      // In production, this would call the actual n8n webhook
-      const mockResponse: JobPostResponse = {
+      // Find matching resumes
+      const matchingResults = await findMatchingResumes(savedJob);
+      console.log(`Found ${matchingResults.length} matching resumes`);
+
+      // Get the top match if available
+      const topMatch = matchingResults.length > 0 ? matchingResults[0] : null;
+
+      const response: JobPostResponse = {
         success: true,
-        message: 'Job posted successfully (demo mode)',
-        job_id: `job_${Date.now()}`,
-        top_resume: {
-          resume_id: `demo_resume_${Date.now()}`,
-          candidate_id: `demo_candidate_${Date.now()}`,
-          score: 85,
-          reasons: ['Strong relevant experience', 'Required skills match', 'Good cultural fit indicators'],
-        },
+        message: 'Job posted and matched successfully',
+        job_id: savedJob.job_id!,
+        top_resume: topMatch ? {
+          resume_id: topMatch.resume_id,
+          candidate_id: topMatch.candidate_id,
+          score: topMatch.score,
+          reasons: topMatch.reasons,
+        } : undefined,
+        total_matches: matchingResults.length,
+        matches: matchingResults.slice(0, 10), // Return top 10 matches
       };
 
-      return NextResponse.json(mockResponse);
+      return NextResponse.json(response);
+    } catch (processingError) {
+      console.error('Job processing error:', processingError);
+
+      // Check if we should fallback to webhook
+      const webhookUrl = process.env.JOB_POST_WEBHOOK;
+      if (webhookUrl) {
+        console.log('Falling back to webhook processing');
+        const webhookResponse = await fetch(webhookUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(jobData),
+        });
+
+        if (webhookResponse.ok) {
+          const webhookData = await webhookResponse.json();
+          return NextResponse.json({
+            success: true,
+            message: 'Job posted successfully (via webhook)',
+            job_id: webhookData.job_id,
+            top_resume: webhookData.top_resume,
+          });
+        }
+      }
+
+      // If no webhook or webhook failed, return error
+      return NextResponse.json(
+        {
+          success: false,
+          message: processingError instanceof Error ? processingError.message : 'Failed to process job'
+        },
+        { status: 500 }
+      );
     }
-
-    // Forward the job data to the n8n webhook
-    const webhookResponse = await fetch(webhookUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(jobData),
-    });
-
-    if (!webhookResponse.ok) {
-      throw new Error(`Webhook request failed: ${webhookResponse.status}`);
-    }
-
-    const webhookData = await webhookResponse.json();
-
-    const response: JobPostResponse = {
-      success: true,
-      message: 'Job posted successfully',
-      job_id: webhookData.job_id,
-      top_resume: webhookData.top_resume,
-    };
-
-    return NextResponse.json(response);
   } catch (error) {
     console.error('Job posting error:', error);
     return NextResponse.json(

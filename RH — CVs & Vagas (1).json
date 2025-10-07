@@ -1,0 +1,935 @@
+{
+  "name": "RH — CVs & Vagas",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "upload",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "e6898e7a-9052-417f-ac93-0b9707f0d150",
+      "name": "API: Receber CV (Webhook)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        1296,
+        624
+      ],
+      "webhookId": "aee77281-609d-48f9-9ef0-7b90fec87490"
+    },
+    {
+      "parameters": {
+        "binaryPropertyName": "file"
+      },
+      "id": "d28ca26f-2e02-41c0-a53b-c1bf353639f6",
+      "name": "Extrair Texto do PDF (CV)",
+      "type": "n8n-nodes-base.readPDF",
+      "typeVersion": 1,
+      "position": [
+        1552,
+        624
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o-mini",
+        "prompt": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "És um extrator de informações de currículos. Devolve SEMPRE um JSON válido (sem texto fora do JSON), no seguinte esquema: { \"nome\": \"string|null\", \"email\": \"string|null\", \"telefone\": \"string|null\", \"linkedin\": \"string|null\", \"localizacao\": {\"city\":\"string|null\",\"country\":\"string|null\"}, \"formacao\": [{\"curso\":\"string|null\",\"instituicao\":\"string|null\",\"inicio\":\"YYYY-MM|null\",\"fim\":\"YYYY-MM|null\"}], \"experiencias\": [{\"empresa\":\"string|null\",\"cargo\":\"string|null\",\"inicio\":\"YYYY-MM|null\",\"fim\":\"YYYY-MM|null\",\"local\":\"string|null\",\"descricao\":\"string|null\"}], \"competencias\": [\"string\", \"...\"], \"idiomas\": [{\"idioma\":\"string\",\"nivel\":\"string\"}] } Regras: - Se não houver um campo, usa null ou [] (nunca inventes). - Datas no formato \"YYYY-MM\" quando conseguires; senão null. - Normaliza email/telefone/LinkedIn quando possível. - Texto de entrada pode estar em PT/EN/ES. - Responde **apenas** com o JSON (sem ``` nem comentários)."
+            },
+            {
+              "content": "={{$json[\"text\"]}}"
+            }
+          ]
+        },
+        "simplifyOutput": false,
+        "options": {},
+        "requestOptions": {}
+      },
+      "id": "242e8b46-e26e-4915-a513-6c54481335a6",
+      "name": "IA: Estruturar Dados do CV",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        1808,
+        624
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "KKy2fzJw2OKu1dgk",
+          "name": "OpenAi account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "function stripMarkdownFences(s){\n  return s.replace(/```(?:json|text)?\\s*/gi, '').replace(/```/g, '').trim();\n}\nfunction removeTrailingCommas(s){\n  return s.replace(/,\\s*([}\\]])/g, '$1');\n}\nfunction tryParseJSON(s){\n  try {\n    return { ok: true, parsed: JSON.parse(s) };\n  } catch (e) {\n    const errMsg = e instanceof Error ? e.message : String(e);\n    return { ok: false, error: errMsg };\n  }\n}\n\nconst inputItem = $input.item; // Code node: primeiro item\nlet raw = null;\n\nif(inputItem && inputItem.json){\n  const j = inputItem.json;\n  if(j.choices && Array.isArray(j.choices) && j.choices[0]){\n    const c0 = j.choices[0];\n    raw = (c0.message && c0.message.content) ? c0.message.content : (c0.text || null);\n  }\n  if(!raw && j.message && j.message.content) raw = j.message.content;\n  if(!raw && j.content) raw = j.content;\n}\n\n// fallback: stringify full json (útil para debugging)\nif(!raw) raw = JSON.stringify(inputItem?.json || {});\n\nraw = stripMarkdownFences(String(raw));\n\n// 1) tentativa direta\nlet attempt = tryParseJSON(raw);\nif(attempt.ok){\n  const parsed = attempt.parsed;\n  const final = Array.isArray(parsed) ? parsed[0] : parsed;\n  return { json: final };\n}\n\n// 2) extract first { ... } block\nconst m = raw.match(/\\{[\\s\\S]*\\}/);\nif(m){\n  let candidate = m[0];\n  candidate = removeTrailingCommas(candidate);\n  attempt = tryParseJSON(candidate);\n  if(attempt.ok){\n    const parsed = attempt.parsed;\n    const final = Array.isArray(parsed) ? parsed[0] : parsed;\n    return { json: final };\n  }\n\n  // heurística agressiva (apenas se necessário)\n  let heuristic = candidate.replace(/(\\r\\n|\\n|\\r)/g,' ');\n  heuristic = heuristic.replace(/(\\s)'([^']*)'(\\s|:|,|\\})/g, '$1\"$2\"$3');\n  heuristic = removeTrailingCommas(heuristic);\n  attempt = tryParseJSON(heuristic);\n  if(attempt.ok){\n    const parsed = attempt.parsed;\n    const final = Array.isArray(parsed) ? parsed[0] : parsed;\n    return { json: final };\n  }\n}\n\n// Falha: devolve objeto de debug\nreturn {\n  json: {\n    ok: false,\n    error: \"Não foi possível parsear JSON da resposta da IA\",\n    raw_preview: raw.slice(0, 2000),\n    full_raw: raw\n  }\n};\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2096,
+        624
+      ],
+      "id": "533e2ffb-7656-4d30-8102-83ab7c47706e",
+      "name": "Code: Normalizar CV (→ candidateDoc & resumeDoc)"
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{\n  JSON.stringify({\n    condensed:\n      (\n        [\n          $json.nome || $json.name,\n          $json.email,\n          $json.telefone || $json.phone,\n          JSON.stringify($json.experiencias || []),\n          JSON.stringify($json.formacao || []),\n          ($json.raw_text_excerpt || '').slice(0,1500)\n        ]\n        .filter(Boolean)\n        .join(' | ')\n        .toLowerCase()\n        .replace(/\\s+/g,' ')\n        .trim()\n      )\n  })\n}}\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2304,
+        624
+      ],
+      "id": "cf2875f9-206a-44e0-a845-eae14650b57e",
+      "name": "Set: Preparar Campos do Candidato"
+    },
+    {
+      "parameters": {
+        "type": "SHA256",
+        "value": "={{ ($json.condensed || '').trim() }}",
+        "dataPropertyName": "cv_hash"
+      },
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 1,
+      "position": [
+        2512,
+        624
+      ],
+      "id": "70fba609-ae3d-4312-bf58-29adc6518a24",
+      "name": "Hash do CV (SHA-256)"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node (Normalize robusto) - Run Once\n// Versão FLATTEN para compatibilidade com Firestore (evita arrays aninhados)\n\n// Funções auxiliares mantidas (UUID, validação, limpeza, etc)\nfunction generateUUID() {\n  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {\n    var r = Math.random() * 16 | 0;\n    var v = c === 'x' ? r : (r & 0x3 | 0x8);\n    return v.toString(16);\n  });\n}\nfunction ensureObject(x){\n  if (x === undefined || x === null) return null;\n  if (typeof x === 'object') return x;\n  if (typeof x === 'string'){\n    try { return JSON.parse(x); } catch(e){ return x; }\n  }\n  return x;\n}\nfunction emailValid(e){\n  if(!e) return null;\n  e = String(e).trim().toLowerCase();\n  var re = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;\n  return re.test(e) ? e : null;\n}\nfunction phoneClean(p){\n  if(!p) return null;\n  var s = String(p).replace(/[^\\d+]/g,'');\n  if(/^\\d{9}$/.test(s)) s = '+351' + s;\n  if(!s.startsWith('+') && s.length >= 9 && s.length <= 15) s = '+' + s;\n  return s;\n}\nfunction normDate(d){\n  if(!d) return null;\n  var s = String(d).trim();\n  if(/^\\d{4}-\\d{2}$/.test(s)) return s;\n  if(/^\\d{4}$/.test(s)) return s;\n  var parsed = Date.parse(s);\n  if(!isNaN(parsed)){\n    var dt = new Date(parsed);\n    return dt.toISOString().slice(0,7);\n  }\n  return null;\n}\nfunction canonicalSkill(s){\n  if(!s) return null;\n  var m = String(s).toLowerCase().trim();\n  var map = {\n    \"js\":\"javascript\",\"nodejs\":\"javascript\",\"node.js\":\"javascript\",\n    \"py\":\"python\",\"aws\":\"amazon web services\",\"gcp\":\"google cloud platform\",\n    \"sqlserver\":\"mssql\",\"c#\":\"csharp\",\".net\":\"dotnet\"\n  };\n  m = m.replace(/[\\u00e0-\\u00e5]/g,'a').replace(/[\\u00e8-\\u00eb]/g,'e').replace(/[\\u00ec-\\u00ef]/g,'i')\n       .replace(/[\\u00f2-\\u00f6]/g,'o').replace(/[\\u00f9-\\u00fc]/g,'u');\n  return map[m] || m;\n}\nfunction parseDurationStringToMonths(s){\n  if(!s) return 0;\n  var str = String(s).toLowerCase();\n  var years = 0, months = 0;\n  var mY = str.match(/(\\d+)\\s*year/);\n  if(mY) years = parseInt(mY[1],10);\n  var mM = str.match(/(\\d+)\\s*month/);\n  if(mM) months = parseInt(mM[1],10);\n  if(!mY){\n    var mY2 = str.match(/(\\d+)\\s*y\\b/);\n    if(mY2) years = parseInt(mY2[1],10);\n  }\n  if(!mM){\n    var mM2 = str.match(/(\\d+)\\s*m\\b/);\n    if(mM2) months = parseInt(mM2[1],10);\n  }\n  return years*12 + months;\n}\nfunction monthsBetweenDates(startStr, endStr){\n  try {\n    var s = Date.parse(startStr);\n    var e = Date.parse(endStr);\n    if(isNaN(s) || isNaN(e)) return 0;\n    var sd = new Date(s), ed = new Date(e);\n    return Math.max(0, Math.round((ed - sd)/(1000*60*60*24*30)));\n  } catch(err){\n    return 0;\n  }\n}\n\n// Entrada principal\nconst input = $input.item;\nconst parsed = input?.json || {};\nconst prof = ensureObject(parsed.professional) || ensureObject(parsed.json_data) || parsed || {};\n\nconst now = new Date().toISOString();\nconst candidate_id = parsed.candidate?.candidate_id || generateUUID();\nconst resume_id = parsed.resume_id || generateUUID();\n\n// CandidateDoc\nconst candidateDoc = {\n  candidate_id,\n  name: parsed.nome || parsed.name || null,\n  email: emailValid(parsed.email || null),\n  phone: phoneClean(parsed.telefone || parsed.phone || null),\n  linkedin: parsed.linkedin || null,\n  location: ensureObject(parsed.localizacao) || { city: null, country: null },\n  consent_given_at: parsed.consent_given_at || null,\n  created_at: now,\n  updated_at: now\n};\n\n// Flattened professional fields\nconst professional = {\n  seniority: prof.seniority || prof.level || null,\n  years_experience: Number(prof.years_experience || 0)\n};\n\n// Experiências\nconst rawExperiencias = prof.experiencias || parsed.experiencias || [];\nif (Array.isArray(rawExperiencias)) {\n  rawExperiencias.forEach((e, i) => {\n    professional[`experience_${i+1}`] = {\n      cargo: e.cargo || null,\n      empresa: e.empresa || null,\n      inicio: normDate(e.inicio) || null,\n      fim: normDate(e.fim) || null,\n      descricao: e.descricao || null,\n      duration_months: parseDurationStringToMonths(e.duracao || '')\n    };\n  });\n}\n\n// Formacoes\nconst rawFormacoes = prof.formacoes || parsed.formacao || [];\nif (Array.isArray(rawFormacoes)) {\n  rawFormacoes.forEach((f, i) => {\n    professional[`education_${i+1}`] = {\n      curso: f.curso || null,\n      instituicao: f.instituicao || null,\n      inicio: normDate(f.inicio) || null,\n      fim: normDate(f.fim) || null\n    };\n  });\n}\n\n// Skills\nconst rawSkills = prof.skills || parsed.competencias || [];\nif (Array.isArray(rawSkills)) {\n  rawSkills.forEach((s, i) => {\n    const skill = canonicalSkill(s);\n    if(skill) professional[`skill_${i+1}`] = skill;\n  });\n}\n\n// Idiomas\nconst rawIdiomas = prof.idiomas || parsed.idiomas || [];\nif (Array.isArray(rawIdiomas)) {\n  rawIdiomas.forEach((id, i) => {\n    professional[`language_${i+1}`] = {\n      idioma: id.idioma || null,\n      nivel: id.nivel || null\n    };\n  });\n}\n\n// ResumeDoc\nconst resumeDoc = {\n  resume_id,\n  candidate_id,\n  file_gcs_path: parsed.file_gcs_path || null,\n  json_data: ensureObject(parsed),\n  professional,\n  raw_text_excerpt: parsed.raw_text_excerpt || null,\n  overall_confidence: Number(parsed.overall_confidence || 0),\n  status: Number(parsed.overall_confidence || 0) >= 0.6 ? 'OK' : 'NEEDS_REVIEW',\n  created_at: now,\n  openai_request_id: parsed._meta?.openai_request_id || null,\n  cv_hash: parsed.cv_hash || null\n};\n\nreturn [{ json: { candidateDoc, resumeDoc } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2752,
+        624
+      ],
+      "id": "bd4bd0ff-bc87-4208-907f-c7982ee3a301",
+      "name": "Code: Montar candidateDoc & resumeDoc (flatten)"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "c7157cc3-a77d-482c-8ef2-1b87bc439a0f",
+              "name": "resume_id",
+              "value": "={{ $json.resumeDoc.resume_id || $json.resume_id }}",
+              "type": "string"
+            },
+            {
+              "id": "09f49afe-ac0a-4686-b172-c71339ff96e1",
+              "name": "candidate_id",
+              "value": "={{ $json.resumeDoc.candidate_id || $json.candidate_id }}",
+              "type": "string"
+            },
+            {
+              "id": "39fab2f0-a979-4fb2-a7af-cd20986e78e6",
+              "name": "file_gcs_path",
+              "value": "={{ $json.resumeDoc.file_gcs_path }}",
+              "type": "string"
+            },
+            {
+              "id": "6f97c105-8994-4db0-871e-0ecb383e6b8a",
+              "name": "overall_confidence",
+              "value": "={{ ($json.resumeDoc && $json.resumeDoc.overall_confidence !== undefined && $json.resumeDoc.overall_confidence !== null) ? Number($json.resumeDoc.overall_confidence) : 0 }}",
+              "type": "number"
+            },
+            {
+              "id": "acba6b86-ad64-4fb1-9136-2cdce7c8b72f",
+              "name": "status",
+              "value": "={{ $json.resumeDoc.status }}",
+              "type": "string"
+            },
+            {
+              "id": "59b05c01-df12-4b08-a643-97b0fc8508c1",
+              "name": "openai_request_id",
+              "value": "={{ $json.resumeDoc.openai_request_id }}",
+              "type": "string"
+            },
+            {
+              "id": "068039eb-3228-4c9b-96bb-aa799b714dbd",
+              "name": "raw_text_excerpt",
+              "value": "={{ $json.resumeDoc.raw_text_excerpt }}",
+              "type": "string"
+            },
+            {
+              "id": "77bad069-f4ce-4c8c-844b-bea6eb3026fa",
+              "name": "json_data_json",
+              "value": "={{ JSON.stringify($json.resumeDoc.json_data) }}",
+              "type": "string"
+            },
+            {
+              "id": "453008b1-59af-428a-8746-e9963874bca1",
+              "name": "professional_json",
+              "value": "={{ JSON.stringify($json.resumeDoc.professional) }}",
+              "type": "string"
+            },
+            {
+              "id": "d5d14d2f-2ea6-4911-b9cf-4a72cb203d83",
+              "name": "created_at",
+              "value": "={{ ($json.resumeDoc && $json.resumeDoc.created_at) ? $json.resumeDoc.created_at : new Date().toISOString() }}",
+              "type": "string"
+            },
+            {
+              "id": "6c525530-5f73-479d-8d19-5953a17532c5",
+              "name": "condensed",
+              "value": "={{\n  (\n    [\n      $json.nome || $json.name,\n      $json.email,\n      $json.telefone || $json.phone,\n      JSON.stringify($json.experiencias || []),\n      JSON.stringify($json.formacao || []),\n      ($json.raw_text_excerpt || '').slice(0,1500)\n    ]\n    .filter(Boolean)\n    .join(' | ')\n    .toLowerCase()\n    .replace(/\\s+/g,' ')\n    .trim()\n  ).replace(/\\n+$/,'') // tira newline final, se houver\n}}\n",
+              "type": "string"
+            },
+            {
+              "id": "6e948cca-469d-45b1-9fc7-26d4eba032ee",
+              "name": "cv_hash",
+              "value": "={{ $json.resumeDoc.cv_hash }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2976,
+        832
+      ],
+      "id": "c71efa06-0e4e-4158-aac1-02ff7670266b",
+      "name": "Set: Preparar Campos do Resume (+condensed)"
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "create",
+        "projectId": "iacv-710e4",
+        "collection": "resumes",
+        "documentId": "={{ $json.resume_id }}",
+        "columns": "=resume_id, candidate_id, file_gcs_path, overall_confidence, status, openai_request_id, raw_text_excerpt, professional_json, json_data_json, cv_hash, created_at"
+      },
+      "type": "n8n-nodes-base.googleFirebaseCloudFirestore",
+      "typeVersion": 1.1,
+      "position": [
+        3264,
+        832
+      ],
+      "id": "c8477b71-bf73-4f9c-8ccf-ba27e9d15940",
+      "name": "Firestore: Salvar Resume",
+      "executeOnce": false,
+      "credentials": {
+        "googleApi": {
+          "id": "N3IcI1Ppx4BzqUXW",
+          "name": "Google Service Account account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "b5795078-df16-452d-826e-811e122e6c9c",
+              "name": "candidate_id",
+              "value": "={{ $json.candidateDoc.candidate_id }}",
+              "type": "string"
+            },
+            {
+              "id": "8ba921b9-9a1b-4a99-9739-d8168d1c17c3",
+              "name": "name",
+              "value": "={{ $json.candidateDoc.name }}",
+              "type": "string"
+            },
+            {
+              "id": "36e7b818-461e-4c2b-8e57-744482409a7d",
+              "name": "email",
+              "value": "={{ $json.candidateDoc.email }}",
+              "type": "string"
+            },
+            {
+              "id": "33c75ef7-ed58-463d-b762-a7d228c8ea35",
+              "name": "phone",
+              "value": "={{ $json.candidateDoc.phone }}",
+              "type": "string"
+            },
+            {
+              "id": "6edb529b-6eaf-4283-90e4-ed02fcb40db9",
+              "name": "linkedin",
+              "value": "={{ $json.candidateDoc.linkedin }}",
+              "type": "string"
+            },
+            {
+              "id": "e0e8243f-c333-4e23-a1df-e3eab6cf2c59",
+              "name": "city",
+              "value": "={{ $json.candidateDoc.location.city }}",
+              "type": "string"
+            },
+            {
+              "id": "f3be6ed4-8116-4480-bb6b-1182cbfbe224",
+              "name": "country",
+              "value": "={{ $json.candidateDoc.location.country }}",
+              "type": "string"
+            },
+            {
+              "id": "c4aadbbe-74e4-493b-bb56-20f008c17491",
+              "name": "created_at",
+              "value": "={{ $json.candidateDoc.created_at }}",
+              "type": "string"
+            },
+            {
+              "id": "611c480a-5f31-4a9a-9a32-87df0adeeb9e",
+              "name": "updated_at",
+              "value": "={{ $json.candidateDoc.updated_at }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2976,
+        624
+      ],
+      "id": "29c32927-6392-4550-811c-fa38ae923c04",
+      "name": "Set: Preparar Campos do Candidato (Final)",
+      "executeOnce": false,
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "create",
+        "projectId": "iacv-710e4",
+        "collection": "candidates",
+        "documentId": "={{$json[\"candidate_id\"]}}",
+        "columns": "=name, email, phone, linkedin, city, country, created_at, updated_at"
+      },
+      "type": "n8n-nodes-base.googleFirebaseCloudFirestore",
+      "typeVersion": 1.1,
+      "position": [
+        3248,
+        624
+      ],
+      "id": "3fd30950-9f83-4ae2-b4f6-58449a42f1bc",
+      "name": "Firestore: Salvar Candidato",
+      "executeOnce": false,
+      "credentials": {
+        "googleApi": {
+          "id": "N3IcI1Ppx4BzqUXW",
+          "name": "Google Service Account account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "jobs",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "63527f75-6850-4397-945c-1a33380f897e",
+      "name": "API: Receber Vaga (Webhook)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        1264,
+        1280
+      ],
+      "webhookId": "4d623e71-ce3e-46be-8675-38ff45b25d9c"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Lê o item atual\nconst b = $json;          // item completo\nconst body = b.body || {}; // os campos vêm em body\n\n// Helper para normalizar arrays/strings\nconst toArray = (v) => {\n  if (Array.isArray(v)) return v.filter(Boolean).map(String).map(s => s.trim());\n  if (typeof v === 'string') return v.split(/[,;\\n]/).map(s => s.trim()).filter(Boolean);\n  return [];\n};\n\n// Monta o objeto job (ajusta campos se precisares)\nconst job = {\n  title: (body.title || '').trim(),\n  seniority: (body.seniority || '').trim(),\n  location: (body.location || '').trim(),\n  workMode: (body.workMode || '').trim().toLowerCase(),\n  contractType: (body.contractType || '').trim(),\n  languages: toArray(body.languages),\n  mustHave: toArray(body.mustHave),\n  niceToHave: toArray(body.niceToHave),\n  salaryMin: Number(body.salaryMin ?? 0),\n  salaryMax: Number(body.salaryMax ?? 0),\n  currency: (body.currency || '').trim(),\n  keywords: toArray(body.keywords),\n  rawText: (body.rawText || '').trim(),\n  webhookUrl: b.webhookUrl || '',\n  executionMode: b.executionMode || 'prod',\n};\n\n// ✅ Em \"Run once for each item\" o retorno TEM que ser um OBJETO { json: ... }\nreturn { json: job };\n"
+      },
+      "id": "9debff13-3697-4099-8ced-b9af63b3e212",
+      "name": "Code: Normalizar Dados da Vaga",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        1520,
+        1280
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.error }}",
+              "value2": "true"
+            }
+          ]
+        }
+      },
+      "id": "fe033184-5397-4385-87d9-b86d90c101a3",
+      "name": "IF: Validar Vaga (Erro?)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1776,
+        1280
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "a01c5b9a-e4a3-441b-b00c-c588f3df9ad4",
+      "name": "API: Responder Vaga OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2240,
+        1376
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "6de400fd-3b58-4e87-bd39-b847f53a5869",
+      "name": "API: Responder Vaga com Erro",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2240,
+        1200
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "create",
+        "projectId": "iacv-710e4",
+        "collection": "jobs",
+        "columns": "title, seniority, location, workMode, contractType, languages, mustHave, niceToHave, salaryMin, salaryMax, currency, keywords, rawText"
+      },
+      "type": "n8n-nodes-base.googleFirebaseCloudFirestore",
+      "typeVersion": 1.1,
+      "position": [
+        2464,
+        1376
+      ],
+      "id": "130f693d-2ea7-4bf6-b813-41ea20b804f1",
+      "name": "Firestore: Salvar Vaga",
+      "credentials": {
+        "googleApi": {
+          "id": "N3IcI1Ppx4BzqUXW",
+          "name": "Google Service Account account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "b4987717-a5bb-4b9f-905c-9f89b707ca80",
+              "name": "title",
+              "value": "={{ $json.title }}",
+              "type": "string"
+            },
+            {
+              "id": "53c11f95-6a42-4557-b479-a208a58a345d",
+              "name": "location",
+              "value": "={{ $json.location }}",
+              "type": "string"
+            },
+            {
+              "id": "a4c8cb53-cf0c-4cfd-9544-ed68cb75d6e3",
+              "name": "mustHave",
+              "value": "={{ $json.mustHave }}",
+              "type": "string"
+            },
+            {
+              "id": "11861672-0e00-405b-88f2-06342d8cb85f",
+              "name": "niceToHave",
+              "value": "={{ $json.niceToHave }}",
+              "type": "string"
+            },
+            {
+              "id": "a15f912f-d906-4168-9b33-1e6212c9101b",
+              "name": "rawText",
+              "value": "={{ $json.rawText }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1968,
+        1568
+      ],
+      "id": "bb6be099-d022-4bdd-a687-6bfe15e9be34",
+      "name": "Set: Preparar Campos da Vaga"
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "getAll",
+        "projectId": "iacv-710e4",
+        "collection": "resumes",
+        "limit": 50
+      },
+      "type": "n8n-nodes-base.googleFirebaseCloudFirestore",
+      "typeVersion": 1.1,
+      "position": [
+        2240,
+        1568
+      ],
+      "id": "b8daf25e-6007-47fd-b608-2f7b26ce0c31",
+      "name": "Firestore: Listar Resumes",
+      "credentials": {
+        "googleApi": {
+          "id": "N3IcI1Ppx4BzqUXW",
+          "name": "Google Service Account account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const out = [];\nfor (const it of $input.all()) {\n  const raw = it.json?.choices?.[0]?.message?.content || it.json?.content || JSON.stringify(it.json);\n  let score = 0, reasons = [];\n  try {\n    const p = typeof raw === 'string' ? JSON.parse(raw) : raw;\n    score = Number(p.score || 0);\n    reasons = Array.isArray(p.reasons) ? p.reasons : [];\n  } catch { reasons = [\"parse_fail\"]; }\n\n  // Se o OpenAI manteve o input, os campos originais vêm juntos.\n  const resume_id = it.json.resume_id || it.json.prev?.resume_id;\n  const candidate_id = it.json.candidate_id || it.json.prev?.candidate_id;\n  const condensed = it.json.condensed || it.json.prev?.condensed;\n\n  out.push({ json: { resume_id, candidate_id, condensed, score, reasons }});\n}\nreturn out;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2464,
+        1568
+      ],
+      "id": "cc841d6f-1208-4a8f-8141-614990d41ded",
+      "name": "Code: Preparar Itens para Scoring"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        2896,
+        1568
+      ],
+      "id": "a5446d92-9173-469f-84e1-69d750ca0db7",
+      "name": "Loop: Iterar Resumes"
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o-mini",
+        "prompt": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "És um avaliador de compatibilidade de CV com vaga. Devolve APENAS JSON: { \"score\": number, \"reasons\": string[] } Score 0-100; dá mais peso aos \"mustHave\"."
+            },
+            {
+              "content": "=VAGA:\nTítulo: {{$item(0).$node[\"Set: Preparar Campos da Vaga\"].json.title}}\nLocal: {{$item(0).$node[\"Set: Preparar Campos da Vaga\"].json.location}}\nMust-have: {{ JSON.stringify($item(0).$node[\"Set: Preparar Campos da Vaga\"].json.mustHave) }}\nNice-to-have: {{ JSON.stringify($item(0).$node[\"Set: Preparar Campos da Vaga\"].json.niceToHave) }}\nTexto: {{$item(0).$node[\"Set: Preparar Campos da Vaga\"].json.rawText}}\n\nCV (condensed):\n{{$json.condensed}}\n"
+            }
+          ]
+        },
+        "simplifyOutput": false,
+        "options": {},
+        "requestOptions": {}
+      },
+      "id": "7e549a0c-dbcf-426f-ad1f-70b83a2de422",
+      "name": "IA: Avaliar Compatibilidade CV ↔ Vaga",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        3152,
+        1584
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "KKy2fzJw2OKu1dgk",
+          "name": "OpenAi account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const out = [];\nfor (const it of $input.all()) {\n  const raw = it.json?.choices?.[0]?.message?.content || it.json?.content || JSON.stringify(it.json);\n  let obj;\n  try { obj = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { obj = {}; }\n  if (Array.isArray(obj)) obj = obj[0] || {};\n  out.push({ json: { score: Number(obj.score || 0), reasons: Array.isArray(obj.reasons) ? obj.reasons : [] } });\n}\nreturn out;\n\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3344,
+        1584
+      ],
+      "id": "7a15e307-3bcc-4fe9-921b-eab4205990de",
+      "name": "Code: Normalizar Resposta da IA (Scoring)"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2896,
+        1216
+      ],
+      "id": "fa0ec4f9-d897-4f0e-92d5-ec322686bb93",
+      "name": "Merge: Combinar Resultados"
+    },
+    {
+      "parameters": {
+        "sortFieldsUi": {
+          "sortField": [
+            {
+              "fieldName": "score",
+              "order": "descending"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.sort",
+      "typeVersion": 1,
+      "position": [
+        3136,
+        1216
+      ],
+      "id": "f406bafa-2ae6-4506-80c0-fae6a1ff3ad4",
+      "name": "Sort: Ordenar por Score (desc)"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.limit",
+      "typeVersion": 1,
+      "position": [
+        3360,
+        1216
+      ],
+      "id": "883a6915-f7e8-46e1-8e59-c8172e38bc86",
+      "name": "Limit: Selecionar Top CV"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\n  \"ok\": true,\n  \"job_title\": \"={{$item(0).$node['Edit Fields'].json.title}}\",\n  \"top_resume\": {\n    \"resume_id\": \"={{$json.resume_id}}\",\n    \"candidate_id\": \"={{$json.candidate_id}}\",\n    \"score\": \"={{$json.score}}\",\n    \"reasons\": \"={{$json.reasons}}\"\n  }\n}\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        3568,
+        1216
+      ],
+      "id": "5b396947-41c2-48a5-9f9a-06cf71e23af7",
+      "name": "API: Responder com Top CV"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "API: Receber CV (Webhook)": {
+      "main": [
+        [
+          {
+            "node": "Extrair Texto do PDF (CV)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extrair Texto do PDF (CV)": {
+      "main": [
+        [
+          {
+            "node": "IA: Estruturar Dados do CV",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IA: Estruturar Dados do CV": {
+      "main": [
+        [
+          {
+            "node": "Code: Normalizar CV (→ candidateDoc & resumeDoc)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Normalizar CV (→ candidateDoc & resumeDoc)": {
+      "main": [
+        [
+          {
+            "node": "Set: Preparar Campos do Candidato",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set: Preparar Campos do Candidato": {
+      "main": [
+        [
+          {
+            "node": "Hash do CV (SHA-256)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hash do CV (SHA-256)": {
+      "main": [
+        [
+          {
+            "node": "Code: Montar candidateDoc & resumeDoc (flatten)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Montar candidateDoc & resumeDoc (flatten)": {
+      "main": [
+        [
+          {
+            "node": "Set: Preparar Campos do Resume (+condensed)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Set: Preparar Campos do Candidato (Final)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set: Preparar Campos do Resume (+condensed)": {
+      "main": [
+        [
+          {
+            "node": "Firestore: Salvar Resume",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set: Preparar Campos do Candidato (Final)": {
+      "main": [
+        [
+          {
+            "node": "Firestore: Salvar Candidato",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API: Receber Vaga (Webhook)": {
+      "main": [
+        [
+          {
+            "node": "Code: Normalizar Dados da Vaga",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Normalizar Dados da Vaga": {
+      "main": [
+        [
+          {
+            "node": "IF: Validar Vaga (Erro?)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: Validar Vaga (Erro?)": {
+      "main": [
+        [
+          {
+            "node": "API: Responder Vaga com Erro",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "API: Responder Vaga OK",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Set: Preparar Campos da Vaga",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API: Responder Vaga OK": {
+      "main": [
+        [
+          {
+            "node": "Firestore: Salvar Vaga",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Firestore: Salvar Vaga": {
+      "main": [
+        []
+      ]
+    },
+    "Set: Preparar Campos da Vaga": {
+      "main": [
+        [
+          {
+            "node": "Firestore: Listar Resumes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Firestore: Listar Resumes": {
+      "main": [
+        [
+          {
+            "node": "Code: Preparar Itens para Scoring",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Preparar Itens para Scoring": {
+      "main": [
+        [
+          {
+            "node": "Loop: Iterar Resumes",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge: Combinar Resultados",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Loop: Iterar Resumes": {
+      "main": [
+        [
+          {
+            "node": "Merge: Combinar Resultados",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IA: Avaliar Compatibilidade CV ↔ Vaga",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IA: Avaliar Compatibilidade CV ↔ Vaga": {
+      "main": [
+        [
+          {
+            "node": "Code: Normalizar Resposta da IA (Scoring)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Normalizar Resposta da IA (Scoring)": {
+      "main": [
+        [
+          {
+            "node": "Loop: Iterar Resumes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge: Combinar Resultados": {
+      "main": [
+        [
+          {
+            "node": "Sort: Ordenar por Score (desc)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sort: Ordenar por Score (desc)": {
+      "main": [
+        [
+          {
+            "node": "Limit: Selecionar Top CV",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Limit: Selecionar Top CV": {
+      "main": [
+        [
+          {
+            "node": "API: Responder com Top CV",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "d3ad816e-5480-4da3-adac-f10ee890c7b1",
+  "meta": {
+    "templateId": "self-building-ai-agent",
+    "templateCredsSetupCompleted": true,
+    "instanceId": "ceadbae4d4ff651c2c89432f0a57caef9cf1258d85abf94c0d28248c567b6fcd"
+  },
+  "id": "jLRwap8BcXgeVUgf",
+  "tags": []
+}

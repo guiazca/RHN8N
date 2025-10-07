@@ -19,6 +19,7 @@ export interface Experience {
   inicio: string | null;
   fim: string | null;
   descricao: string | null;
+  local?: string | null;
   duration_months?: number;
 }
 
@@ -33,6 +34,24 @@ export interface Language {
   idioma: string | null;
   nivel: string | null;
 }
+
+export interface CVData {
+  nome?: string | null;
+  name?: string | null;
+  email?: string | null;
+  telefone?: string | null;
+  phone?: string | null;
+  linkedin?: string | null;
+  localizacao?: {
+    city?: string | null;
+    country?: string | null;
+  } | null;
+  formacao?: Education[];
+  experiencias?: Experience[];
+  competencias?: string[];
+  idiomas?: Language[];
+}
+
 
 export interface Professional {
   seniority: string | null;
@@ -57,7 +76,7 @@ export interface Resume {
   resume_id: string;
   candidate_id: string;
   file_gcs_path: string | null;
-  json_data: any;
+  json_data: CVData;
   professional: Professional;
   raw_text_excerpt: string | null;
   overall_confidence: number;
@@ -112,4 +131,11 @@ export interface JobPostResponse {
     score: number;
     reasons: string[];
   };
+  total_matches?: number;
+  matches?: Array<{
+    resume_id: string;
+    candidate_id: string;
+    score: number;
+    reasons: string[];
+  }>;
 }
