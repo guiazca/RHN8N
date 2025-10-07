@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Job, JobPostResponse } from '@/types';
 import { z } from 'zod';
-import { saveJob, findMatchingResumes } from '@/lib/localStorage';
 
 const JobSchema = z.object({
   title: z.string().min(1, 'Job title is required'),
@@ -41,63 +40,57 @@ export async function POST(request: NextRequest) {
     const jobData: Job = validationResult.data;
 
     try {
-      // Save job to local storage
-      const savedJob = await saveJob(jobData);
-      console.log('Job saved to local storage:', savedJob.job_id);
+      // Forward to N8N webhook for processing
+      const webhookUrl = process.env.N8N_JOBS_WEBHOOK_URL;
+      if (!webhookUrl) {
+        return NextResponse.json(
+          { success: false, message: 'N8N jobs webhook URL not configured' },
+          { status: 500 }
+        );
+      }
 
-      // Find matching resumes
-      const matchingResults = await findMatchingResumes(savedJob);
-      console.log(`Found ${matchingResults.length} matching resumes`);
+      console.log('Forwarding job to N8N webhook:', webhookUrl);
 
-      // Get the top match if available
-      const topMatch = matchingResults.length > 0 ? matchingResults[0] : null;
+      const webhookResponse = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(jobData),
+      });
+
+      if (!webhookResponse.ok) {
+        const errorText = await webhookResponse.text();
+        console.error('N8N jobs webhook error:', errorText);
+        return NextResponse.json(
+          {
+            success: false,
+            message: 'Failed to process job via N8N',
+            error: errorText
+          },
+          { status: webhookResponse.status }
+        );
+      }
+
+      const webhookData = await webhookResponse.json();
+      console.log('N8N job processing completed:', webhookData);
 
       const response: JobPostResponse = {
         success: true,
-        message: 'Job posted and matched successfully',
-        job_id: savedJob.job_id!,
-        top_resume: topMatch ? {
-          resume_id: topMatch.resume_id,
-          candidate_id: topMatch.candidate_id,
-          score: topMatch.score,
-          reasons: topMatch.reasons,
-        } : undefined,
-        total_matches: matchingResults.length,
-        matches: matchingResults.slice(0, 10), // Return top 10 matches
+        message: 'Job posted and processed successfully via N8N',
+        job_id: webhookData.job_id || webhookData.id,
+        top_resume: webhookData.top_resume,
+        total_matches: webhookData.total_matches,
+        matches: webhookData.matches,
       };
 
       return NextResponse.json(response);
     } catch (processingError) {
       console.error('Job processing error:', processingError);
-
-      // Check if we should fallback to webhook
-      const webhookUrl = process.env.JOB_POST_WEBHOOK;
-      if (webhookUrl) {
-        console.log('Falling back to webhook processing');
-        const webhookResponse = await fetch(webhookUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(jobData),
-        });
-
-        if (webhookResponse.ok) {
-          const webhookData = await webhookResponse.json();
-          return NextResponse.json({
-            success: true,
-            message: 'Job posted successfully (via webhook)',
-            job_id: webhookData.job_id,
-            top_resume: webhookData.top_resume,
-          });
-        }
-      }
-
-      // If no webhook or webhook failed, return error
       return NextResponse.json(
         {
           success: false,
-          message: processingError instanceof Error ? processingError.message : 'Failed to process job'
+          message: processingError instanceof Error ? processingError.message : 'Failed to process job via N8N'
         },
         { status: 500 }
       );
@@ -105,7 +98,10 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('Job posting error:', error);
     return NextResponse.json(
-      { success: false, message: 'Internal server error' },
+      {
+        success: false,
+        message: error instanceof Error ? error.message : 'Internal server error'
+      },
       { status: 500 }
     );
   }
