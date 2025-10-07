@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { CVUploadResponse } from '@/types';
-import { extractPDFText, processCVWithAI, createProcessedCV } from '@/lib/cvProcessor';
-import { saveResume } from '@/lib/localStorage';
 
 export async function POST(request: NextRequest) {
   try {
@@ -31,72 +29,56 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Convert file to buffer
-    const buffer = Buffer.from(await file.arrayBuffer());
-
-    try {
-      // Extract text from PDF
-      const text = await extractPDFText(buffer);
-      console.log('Text extracted successfully:', text.length, 'characters');
-
-      // Process with AI
-      const { data, confidence, requestId } = await processCVWithAI(text);
-      console.log('AI processing completed with confidence:', confidence);
-
-      // Create processed CV object
-      const processedCV = createProcessedCV(data, text, confidence, requestId, file.name);
-
-      // Save to local storage
-      await saveResume(processedCV);
-      console.log('CV saved to local storage');
-
-      const response: CVUploadResponse = {
-        success: true,
-        message: 'CV uploaded and processed successfully',
-        resume_id: processedCV.resume_id,
-        candidate_id: processedCV.candidate_id,
-      };
-
-      return NextResponse.json(response);
-    } catch (processingError) {
-      console.error('CV processing error:', processingError);
-
-      // Check if we should fallback to webhook
-      const webhookUrl = process.env.CV_UPLOAD_WEBHOOK;
-      if (webhookUrl) {
-        console.log('Falling back to webhook processing');
-        const webhookFormData = new FormData();
-        webhookFormData.append('file', file);
-
-        const webhookResponse = await fetch(webhookUrl, {
-          method: 'POST',
-          body: webhookFormData,
-        });
-
-        if (webhookResponse.ok) {
-          const webhookData = await webhookResponse.json();
-          return NextResponse.json({
-            success: true,
-            message: 'CV uploaded successfully (via webhook)',
-            resume_id: webhookData.resume_id,
-            candidate_id: webhookData.candidate_id,
-          });
-        }
-      }
-
-      // If no webhook or webhook failed, return error
+    // Forward to N8N webhook for processing
+    const webhookUrl = process.env.N8N_WEBHOOK_URL;
+    if (!webhookUrl) {
       return NextResponse.json(
-        {
-          success: false,
-          message: processingError instanceof Error ? processingError.message : 'Failed to process CV'
-        },
+        { success: false, message: 'N8N webhook URL not configured' },
         { status: 500 }
       );
     }
+
+    console.log('Forwarding CV to N8N webhook:', webhookUrl);
+
+    const webhookFormData = new FormData();
+    webhookFormData.append('file', file);
+
+    const webhookResponse = await fetch(webhookUrl, {
+      method: 'POST',
+      body: webhookFormData,
+    });
+
+    if (!webhookResponse.ok) {
+      const errorText = await webhookResponse.text();
+      console.error('N8N webhook error:', errorText);
+      return NextResponse.json(
+        {
+          success: false,
+          message: 'Failed to process CV via N8N',
+          error: errorText
+        },
+        { status: webhookResponse.status }
+      );
+    }
+
+    const webhookData = await webhookResponse.json();
+    console.log('N8N processing completed:', webhookData);
+
+    const response: CVUploadResponse = {
+      success: true,
+      message: 'CV uploaded and processed successfully via N8N',
+      resume_id: webhookData.resume_id || webhookData.id,
+      candidate_id: webhookData.candidate_id,
+    };
+
+    return NextResponse.json(response);
   } catch (error) {
     console.error('CV upload error:', error);
     return NextResponse.json(
-      { success: false, message: 'Internal server error' },
+      {
+        success: false,
+        message: error instanceof Error ? error.message : 'Internal server error'
+      },
       { status: 500 }
     );
   }

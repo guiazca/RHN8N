@@ -75,8 +75,6 @@ cp .env.local.example .env.local
 
 Update `.env.local` with your configuration:
 ```env
-# OpenAI API Key
-OPENAI_API_KEY=your_openai_api_key_here
 
 # Firebase Configuration
 FIREBASE_PROJECT_ID=iacv-710e4
@@ -178,7 +176,6 @@ The application can be deployed to any platform supporting Node.js:
 
 ### Environment Variables
 
-- `OPENAI_API_KEY`: Required for AI-powered text extraction and matching
 - `FIREBASE_PROJECT_ID`: Firebase project ID for data storage
 - `FIREBASE_CLIENT_EMAIL`: Service account email for Firebase admin
 - `FIREBASE_PRIVATE_KEY`: Private key for Firebase authentication
