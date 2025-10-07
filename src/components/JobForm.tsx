@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Briefcase, MapPin, DollarSign, CheckCircle, AlertCircle } from 'lucide-react';
+import { Briefcase, MapPin, CheckCircle, AlertCircle } from 'lucide-react';
 import { postJob } from '@/lib/api';
 import { Job, JobPostResponse } from '@/types';
 import Button from './ui/Button';

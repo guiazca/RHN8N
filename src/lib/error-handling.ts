@@ -35,13 +35,13 @@ export class APIError extends AppError {
   }
 }
 
-export const handleAsyncError = (fn: Function) => {
-  return (req: any, res: any, next: any) => {
+export const handleAsyncError = (fn: (req: unknown, res: unknown, next: unknown) => Promise<void>) => {
+  return (req: unknown, res: unknown, next: unknown) => {
     Promise.resolve(fn(req, res, next)).catch(next);
   };
 };
 
-export const createErrorResponse = (error: any) => {
+export const createErrorResponse = (error: unknown) => {
   if (error instanceof AppError) {
     return {
       success: false,
